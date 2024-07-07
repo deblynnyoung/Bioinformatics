@@ -1,0 +1,88 @@
+# Step 1: Environment Setup
+# Create and activate Conda environment
+conda create -n bioinfo_env python=3.8
+conda activate bioinfo_env
+
+# Install required tools
+conda install -c bioconda bwa samtools gatk4 fastqc trimmomatic picard
+
+# Step 2: Download Reference Genome and Sequence Reads
+# Download reference genome
+datasets download genome accession GCF_020735445.1 --filename GCF_020735445.1.zip
+unzip GCF_020735445.1.zip
+
+# Download sequence reads
+prefetch SRX23539992
+fastq-dump --split-files SRR27878129
+
+# Step 3: Quality Control
+# Run FastQC on raw reads
+fastqc /home/youngdeblynn/project/raw_data/SRR27878129_1.fastq /home/youngdeblynn/project/raw_data/SRR27878129_2.fastq -o /home/youngdeblynn/project/qc/
+
+# Step 4: Trimming
+# Trim reads with Trimmomatic
+trimmomatic PE -phred33 \
+  /home/youngdeblynn/project/raw_data/SRR27878129_1.fastq /home/youngdeblynn/project/raw_data/SRR27878129_2.fastq \
+  /home/youngdeblynn/project/trimmed_data/SRR27878129_1_paired.fastq /home/youngdeblynn/project/trimmed_data/SRR27878129_1_unpaired.fastq \
+  /home/youngdeblynn/project/trimmed_data/SRR27878129_2_paired.fastq /home/youngdeblynn/project/trimmed_data/SRR27878129_2_unpaired.fastq \
+  ILLUMINACLIP:TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 \
+  -summary /home/youngdeblynn/project/trimmed_data/trimmomatic_summary.txt
+
+# Step 5: Indexing Reference Genome
+# Index reference genome with BWA
+bwa index /home/youngdeblynn/ncbi_dataset/data/GCF_020735445.1/GCF_020735445.1_ASM2073544v1_genomic.fna
+
+# Create FASTA index with SAMtools
+samtools faidx /home/youngdeblynn/ncbi_dataset/data/GCF_020735445.1/GCF_020735445.1_ASM2073544v1_genomic.fna
+
+# Create sequence dictionary with Picard
+picard CreateSequenceDictionary \
+  R=/home/youngdeblynn/ncbi_dataset/data/GCF_020735445.1/GCF_020735445.1_ASM2073544v1_genomic.fna \
+  O=/home/youngdeblynn/ncbi_dataset/data/GCF_020735445.1/GCF_020735445.1_ASM2073544v1_genomic.dict
+
+# Step 6: Alignment
+# Align trimmed reads to reference genome using BWA
+bwa mem /home/youngdeblynn/ncbi_dataset/data/GCF_020735445.1/GCF_020735445.1_ASM2073544v1_genomic.fna \
+  /home/youngdeblynn/project/trimmed_data/SRR27878129_1_paired.fastq \
+  /home/youngdeblynn/project/trimmed_data/SRR27878129_2_paired.fastq \
+  > /home/youngdeblynn/project/aligned_data/aligned_reads.sam
+
+# Step 7: Post-Alignment Processing
+# Convert SAM to BAM, sort, and index
+samtools view -Sb /home/youngdeblynn/project/aligned_data/aligned_reads.sam | \
+  samtools sort -o /home/youngdeblynn/project/aligned_data/aligned_reads_sorted.bam
+samtools index /home/youngdeblynn/project/aligned_data/aligned_reads_sorted.bam
+
+# Step 8: Mark Duplicates
+# Mark duplicates using Picard
+picard MarkDuplicates \
+  I=/home/youngdeblynn/project/aligned_data/aligned_reads_sorted.bam \
+  O=/home/youngdeblynn/project/aligned_data/aligned_reads_marked.bam \
+  M=/home/youngdeblynn/project/aligned_data/marked_dup_metrics.txt
+
+# Index the marked BAM file
+samtools index /home/youngdeblynn/project/aligned_data/aligned_reads_marked.bam
+
+# Step 9: Add Read Groups
+# Add read groups to BAM file
+picard AddOrReplaceReadGroups \
+  I=/home/youngdeblynn/project/aligned_data/aligned_reads_marked.bam \
+  O=/home/youngdeblynn/project/aligned_data/aligned_reads_with_rg.bam \
+  RGID=SRR27878129 \
+  RGLB=Pcopri_RGI_1 \
+  RGPL=ILLUMINA \
+  RGPU=Illumina_MiSeq \
+  RGSM=Pcopri_RGI_1
+
+# Index the BAM file with read groups
+samtools index /home/youngdeblynn/project/aligned_data/aligned_reads_with_rg.bam
+
+# Step 10: Variant Calling
+# Call variants using GATK HaplotypeCaller
+gatk HaplotypeCaller \
+  -R /home/youngdeblynn/ncbi_dataset/data/GCF_020735445.1/GCF_020735445.1_ASM2073544v1_genomic.fna \
+  -I /home/youngdeblynn/project/aligned_data/aligned_reads_with_rg.bam \
+  -O /home/youngdeblynn/project/variant_data/output_variants.vcf
+
+# Verify the output VCF file
+head /home/youngdeblynn/project/variant_data/output_variants.vcf
